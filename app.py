@@ -43,14 +43,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# === Charger le modèle (cache pour performance) ===
+# === Charger le modèle depuis Hugging Face ===
 @st.cache_resource
 def load_model():
-    """Charge le modèle QA une seule fois"""
+    """Charge le modèle QA fine-tuné depuis Hugging Face"""
     return pipeline(
         "question-answering",
-        model="aubmindlab/bert-base-arabertv2",  # Ou votre modèle HuggingFace
-        tokenizer="aubmindlab/bert-base-arabertv2",
+        model="sonomikane/arabert-qa-arabic-wikipedia",  # Votre modèle fine-tuné
+        tokenizer="sonomikane/arabert-qa-arabic-wikipedia",
         device=-1  # CPU pour Streamlit Cloud
     )
 
