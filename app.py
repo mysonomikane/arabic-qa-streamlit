@@ -177,7 +177,8 @@ st.markdown("""
 
 **اسألني أي سؤال وسأبحث في ويكيبيديا العربية لأجد الإجابة!**
 
-🤖 هذا النظام يستخدم نموذج AraBERT المُدرَّب على بيانات ويكيبيديا العربية
+🤖 **النموذج المُستخدم:** [sonomikane/arabert-qa-arabic-wikipedia](https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia)  
+📚 نموذج AraBERT مُدرَّب على TyDi QA + ARCD + XQuAD
 """)
 
 st.divider()
@@ -296,8 +297,9 @@ with st.sidebar:
     
     ---
     
-    **📊 معلومات النموذج:**
-    - **الاسم:** AraBERT-QA
+    **📊 معلومات النموذج المُدرَّب:**
+    - **الاسم:** sonomikane/arabert-qa-arabic-wikipedia
+    - **الأساس:** AraBERT-v2
     - **التدريب:** TyDi QA + ARCD + XQuAD
     - **F1-Score:** 54.36%
     - **Exact Match:** 32.80%
@@ -316,6 +318,6 @@ st.markdown("""
 <div style="text-align: center; color: gray; font-size: 12px;">
     🔍 <strong>Arabic Wikipedia QA Assistant</strong> | 
     نظام RAG للإجابة على الأسئلة من ويكيبيديا العربية<br>
-    <a href="https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia">sonomikane/arabert-qa-arabic-wikipedia</a>
+    🤖 <strong>النموذج:</strong> <a href="https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia">sonomikane/arabert-qa-arabic-wikipedia</a> (Fine-tuned by sonomikane)
 </div>
 """, unsafe_allow_html=True)
