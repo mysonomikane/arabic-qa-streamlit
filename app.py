@@ -1,23 +1,25 @@
 import streamlit as st
 from transformers import pipeline
+import requests
 
 # Configuration de la page
 st.set_page_config(
-    page_title="نظام الإجابة على الأسئلة",
-    page_icon="🤖",
+    page_title="مساعد ويكيبيديا العربية",
+    page_icon="🔍",
     layout="centered"
 )
 
 # CSS pour le support RTL (arabe)
 st.markdown("""
 <style>
-    .stTextInput input, .stTextArea textarea {
+    .stTextInput input {
         direction: rtl;
         text-align: right;
-        font-size: 18px;
+        font-size: 20px;
+        padding: 15px;
     }
     .answer-box {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
         padding: 25px;
         border-radius: 15px;
         color: white;
@@ -25,23 +27,21 @@ st.markdown("""
         text-align: right;
         margin: 20px 0;
     }
-    .answer-box h2 {
-        margin: 0;
-        font-size: 24px;
-    }
     .context-box {
-        background-color: #f0f2f6;
+        background-color: #f5f5f5;
         padding: 15px;
         border-radius: 10px;
         direction: rtl;
         text-align: right;
         margin: 10px 0;
+        border-left: 4px solid #1e88e5;
     }
-    .info-box {
+    .source-link {
         background-color: #e3f2fd;
-        padding: 15px;
-        border-radius: 10px;
-        margin: 10px 0;
+        padding: 8px 15px;
+        border-radius: 20px;
+        margin: 5px;
+        display: inline-block;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -57,101 +57,153 @@ def load_model():
         device=-1
     )
 
+# === Recherche Wikipedia Arabe ===
+def search_wikipedia_arabic(query, num_results=5):
+    """
+    Recherche dans Wikipedia arabe et retourne le contenu des articles pertinents.
+    C'est le composant RETRIEVAL du système RAG.
+    """
+    try:
+        api_url = "https://ar.wikipedia.org/w/api.php"
+        
+        # Étape 1: Rechercher les articles pertinents
+        search_params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": num_results,
+            "format": "json",
+            "utf8": 1
+        }
+        
+        response = requests.get(api_url, params=search_params, timeout=15)
+        response.raise_for_status()
+        search_data = response.json()
+        
+        if "query" not in search_data or not search_data["query"]["search"]:
+            return None, [], "لم يتم العثور على نتائج"
+        
+        # Récupérer les titres des articles trouvés
+        titles = [result["title"] for result in search_data["query"]["search"]]
+        
+        # Étape 2: Récupérer le contenu des articles
+        content_params = {
+            "action": "query",
+            "titles": "|".join(titles[:3]),  # Limiter à 3 articles
+            "prop": "extracts",
+            "exintro": False,
+            "explaintext": True,
+            "exlimit": 3,
+            "format": "json",
+            "utf8": 1
+        }
+        
+        response = requests.get(api_url, params=content_params, timeout=15)
+        response.raise_for_status()
+        content_data = response.json()
+        
+        # Extraire le contenu
+        pages = content_data.get("query", {}).get("pages", {})
+        contexts = []
+        sources = []
+        
+        for page_id, page in pages.items():
+            if page_id != "-1" and "extract" in page:
+                text = page["extract"]
+                # Prendre les premiers 1500 caractères de chaque article
+                if len(text) > 100:
+                    contexts.append(text[:1500])
+                    sources.append({
+                        "title": page.get("title", ""),
+                        "url": f"https://ar.wikipedia.org/wiki/{page.get('title', '').replace(' ', '_')}"
+                    })
+        
+        if not contexts:
+            return None, [], "لم يتم العثور على محتوى"
+        
+        # Combiner tous les contextes
+        combined_context = "\n\n".join(contexts)
+        return combined_context, sources, None
+        
+    except requests.exceptions.Timeout:
+        return None, [], "انتهت مهلة الاتصال بويكيبيديا"
+    except requests.exceptions.RequestException as e:
+        return None, [], f"خطأ في الاتصال: {str(e)}"
+    except Exception as e:
+        return None, [], f"خطأ: {str(e)}"
+
 # === Interface principale ===
 st.markdown("""
-# 🤖 نظام الإجابة على الأسئلة بالعربية
-## Arabic Question Answering System
+# 🔍 مساعد ويكيبيديا العربية
+## Arabic Wikipedia Assistant
 
-**كيف يعمل النظام:**
-1. الصق نصاً من ويكيبيديا أو أي مصدر آخر
-2. اكتب سؤالك
-3. النظام سيستخرج الإجابة من النص
+**اسألني أي سؤال وسأبحث في ويكيبيديا العربية لأجد الإجابة!**
+
+🤖 هذا النظام يستخدم نموذج AraBERT المُدرَّب على بيانات ويكيبيديا العربية
 """)
-
-# Info box
-st.markdown("""
-<div class="info-box">
-⚠️ <strong>ملاحظة مهمة:</strong> هذا النموذج يستخرج الإجابة من النص المقدم. يجب أن تكون الإجابة موجودة في النص.
-</div>
-""", unsafe_allow_html=True)
 
 st.divider()
 
 # Charger le modèle
-with st.spinner("جاري تحميل النموذج... (Chargement du modèle ~1-2 min)"):
+with st.spinner("⏳ جاري تحميل النموذج... (Chargement du modèle)"):
     qa_pipeline = load_model()
-    st.success("✅ تم تحميل النموذج بنجاح!")
 
-# === Exemples pré-définis ===
-st.markdown("### 💡 اختر مثالاً أو أدخل نصك:")
-
-examples = {
-    "🇪🇬 مصر": {
-        "context": "مصر أو رسمياً جمهورية مصر العربية، دولة عربية تقع في الركن الشمالي الشرقي من قارة أفريقيا. عاصمتها القاهرة وهي أكبر مدينة في العالم العربي وأفريقيا. يبلغ عدد سكان مصر حوالي 104 مليون نسمة. تمتلك مصر سواحل طويلة على البحر الأبيض المتوسط والبحر الأحمر.",
-        "questions": ["ما هي عاصمة مصر؟", "كم عدد سكان مصر؟", "أين تقع مصر؟"]
-    },
-    "🏛️ جامعة القاهرة": {
-        "context": "جامعة القاهرة هي ثاني أقدم الجامعات المصرية. تأسست كلياتها المختلفة في عام 1908 وكانت تسمى الجامعة المصرية. تقع في مدينة الجيزة. تضم الجامعة حوالي 200000 طالب وطالبة.",
-        "questions": ["متى تأسست جامعة القاهرة؟", "أين تقع الجامعة؟", "كم عدد الطلاب؟"]
-    },
-    "🌊 نهر النيل": {
-        "context": "نهر النيل هو أطول أنهار الكرة الأرضية. يبلغ طوله حوالي 6650 كيلومتر. ينبع النيل من بحيرة فيكتوريا ويصب في البحر الأبيض المتوسط. يمر النيل بعشر دول أفريقية.",
-        "questions": ["ما هو طول نهر النيل؟", "من أين ينبع النيل؟", "أين يصب النيل؟"]
-    },
-    "📝 نص مخصص": {
-        "context": "",
-        "questions": []
-    }
-}
-
-# Sélection d'exemple
-selected_example = st.selectbox(
-    "اختر موضوعاً:",
-    list(examples.keys()),
-    index=0
+# Zone de question principale
+question = st.text_input(
+    "❓ اكتب سؤالك هنا:",
+    placeholder="مثال: ما هي عاصمة مصر؟ من هو طه حسين؟ متى تأسست جامعة القاهرة؟",
+    key="main_question"
 )
 
-# Zone de contexte
-if selected_example == "📝 نص مخصص":
-    context = st.text_area(
-        "📄 الصق النص هنا:",
-        placeholder="الصق هنا نصاً من ويكيبيديا العربية أو أي مصدر آخر...",
-        height=200
-    )
-    question = st.text_input(
-        "❓ اكتب سؤالك:",
-        placeholder="مثال: ما هي عاصمة مصر؟"
-    )
-else:
-    context = examples[selected_example]["context"]
-    st.markdown(f'<div class="context-box"><strong>📄 النص:</strong><br>{context}</div>', unsafe_allow_html=True)
-    
-    # Questions suggérées
-    st.markdown("**❓ أسئلة مقترحة:**")
-    cols = st.columns(len(examples[selected_example]["questions"]))
-    question = ""
-    
-    for i, q in enumerate(examples[selected_example]["questions"]):
-        with cols[i]:
-            if st.button(q, key=f"q_{i}", use_container_width=True):
-                st.session_state.selected_q = q
-    
-    # Question personnalisée ou sélectionnée
-    if "selected_q" in st.session_state:
-        question = st.session_state.selected_q
-        del st.session_state.selected_q
-    else:
-        question = st.text_input("أو اكتب سؤالك الخاص:", placeholder="...")
+# Exemples de questions
+st.markdown("### 💡 أمثلة على الأسئلة:")
+col1, col2, col3 = st.columns(3)
+
+example_questions = [
+    "ما هي عاصمة مصر؟",
+    "من هو نجيب محفوظ؟",
+    "ما هو نهر النيل؟",
+    "متى تأسست جامعة القاهرة؟",
+    "من هو صلاح الدين الأيوبي؟",
+    "ما هي الأهرامات؟"
+]
+
+cols = st.columns(3)
+for i, q in enumerate(example_questions):
+    with cols[i % 3]:
+        if st.button(q, key=f"ex_{i}", use_container_width=True):
+            st.session_state.main_question = q
+            st.rerun()
+
+st.divider()
 
 # Bouton de recherche
-if st.button("🔍 ابحث عن الإجابة", type="primary", use_container_width=True):
-    if question and context:
-        with st.spinner("🤔 جاري تحليل النص..."):
+search_clicked = st.button(
+    "🔍 ابحث في ويكيبيديا",
+    type="primary",
+    use_container_width=True
+)
+
+# === Traitement de la question ===
+if search_clicked and question:
+    
+    # Étape 1: Recherche dans Wikipedia (RETRIEVAL)
+    with st.spinner("🔍 جاري البحث في ويكيبيديا العربية..."):
+        context, sources, error = search_wikipedia_arabic(question)
+    
+    if error:
+        st.error(f"❌ {error}")
+    elif context:
+        # Afficher les sources trouvées
+        st.success(f"✅ تم العثور على {len(sources)} مقالات ذات صلة")
+        
+        # Étape 2: Extraction de la réponse (GENERATION)
+        with st.spinner("🤔 جاري تحليل المعلومات واستخراج الإجابة..."):
             try:
                 result = qa_pipeline(
                     question=question,
                     context=context,
-                    max_answer_len=100
+                    max_answer_len=150
                 )
                 
                 answer = result["answer"]
@@ -160,28 +212,72 @@ if st.button("🔍 ابحث عن الإجابة", type="primary", use_container_
                 # Afficher la réponse
                 st.markdown(f"""
                 <div class="answer-box">
-                    <p>❓ السؤال: {question}</p>
-                    <h2>📝 الإجابة: {answer}</h2>
-                    <p>🎯 نسبة الثقة: {score*100:.1f}%</p>
+                    <p style="font-size: 16px; opacity: 0.9;">❓ السؤال: {question}</p>
+                    <h2 style="font-size: 28px; margin: 15px 0;">📝 {answer}</h2>
+                    <p style="font-size: 14px;">🎯 نسبة الثقة: {score*100:.1f}%</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 # Barre de confiance
                 st.progress(score)
                 
+                # Avertissement si confiance faible
                 if score < 0.3:
-                    st.warning("⚠️ نسبة الثقة منخفضة. قد لا تكون الإجابة دقيقة.")
+                    st.warning("⚠️ نسبة الثقة منخفضة. قد تحتاج لإعادة صياغة السؤال.")
+                
+                # Afficher les sources
+                st.markdown("### 📚 المصادر من ويكيبيديا:")
+                for src in sources:
+                    st.markdown(f'<span class="source-link">📄 <a href="{src["url"]}" target="_blank">{src["title"]}</a></span>', unsafe_allow_html=True)
+                
+                # Afficher le contexte utilisé
+                with st.expander("📖 عرض النص المستخدم من ويكيبيديا"):
+                    st.markdown(f'<div class="context-box">{context[:2000]}...</div>', unsafe_allow_html=True)
                     
             except Exception as e:
-                st.error(f"❌ خطأ: {str(e)}")
+                st.error(f"❌ خطأ في التحليل: {str(e)}")
     else:
-        st.warning("⚠️ الرجاء إدخال النص والسؤال")
+        st.warning("⚠️ لم أجد معلومات كافية. جرب سؤالاً آخر أو أعد صياغته.")
 
-# === Footer ===
+elif search_clicked:
+    st.warning("⚠️ الرجاء كتابة سؤال أولاً")
+
+# === Sidebar avec informations ===
+with st.sidebar:
+    st.markdown("## ℹ️ عن النظام")
+    st.markdown("""
+    **🤖 كيف يعمل النظام (RAG):**
+    
+    1️⃣ **البحث (Retrieval)**
+    - يبحث في ويكيبيديا العربية
+    - يجلب المقالات ذات الصلة
+    
+    2️⃣ **الاستخراج (Generation)**
+    - يحلل النصوص المُسترجعة
+    - يستخرج الإجابة الدقيقة
+    
+    ---
+    
+    **📊 معلومات النموذج:**
+    - **الاسم:** AraBERT-QA
+    - **التدريب:** TyDi QA + ARCD + XQuAD
+    - **F1-Score:** 54.36%
+    - **Exact Match:** 32.80%
+    
+    ---
+    
+    **🔗 الروابط:**
+    """)
+    
+    st.markdown("[🤗 النموذج على HuggingFace](https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia)")
+    st.markdown("[📖 ويكيبيديا العربية](https://ar.wikipedia.org)")
+
+# Footer
 st.divider()
 st.markdown("""
-<div style="text-align: center; color: gray; font-size: 14px;">
-    🤖 <strong>Modèle:</strong> <a href="https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia">sonomikane/arabert-qa-arabic-wikipedia</a><br>
-    📊 Fine-tuné sur TyDi QA + ARCD + XQuAD | F1: 54.36%
+<div style="text-align: center; color: gray; font-size: 12px;">
+    🔍 <strong>Arabic Wikipedia QA Assistant</strong> | 
+    نظام RAG للإجابة على الأسئلة من ويكيبيديا العربية<br>
+    <a href="https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia">sonomikane/arabert-qa-arabic-wikipedia</a>
 </div>
 """, unsafe_allow_html=True)
