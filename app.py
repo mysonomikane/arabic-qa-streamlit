@@ -66,6 +66,11 @@ def search_wikipedia_arabic(query, num_results=5):
     try:
         api_url = "https://ar.wikipedia.org/w/api.php"
         
+        # Headers requis par Wikipedia API
+        headers = {
+            "User-Agent": "ArabicQABot/1.0 (https://github.com/mysonomikane/arabic-qa-streamlit; Arabic QA Research Project)"
+        }
+        
         # Étape 1: Rechercher les articles pertinents
         search_params = {
             "action": "query",
@@ -76,7 +81,7 @@ def search_wikipedia_arabic(query, num_results=5):
             "utf8": 1
         }
         
-        response = requests.get(api_url, params=search_params, timeout=15)
+        response = requests.get(api_url, params=search_params, headers=headers, timeout=15)
         response.raise_for_status()
         search_data = response.json()
         
@@ -98,7 +103,7 @@ def search_wikipedia_arabic(query, num_results=5):
             "utf8": 1
         }
         
-        response = requests.get(api_url, params=content_params, timeout=15)
+        response = requests.get(api_url, params=content_params, headers=headers, timeout=15)
         response.raise_for_status()
         content_data = response.json()
         
