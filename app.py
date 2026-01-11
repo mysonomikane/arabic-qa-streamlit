@@ -1,6 +1,9 @@
 import streamlit as st
 from transformers import pipeline
 import requests
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configuration de la page
 st.set_page_config(
@@ -57,6 +60,32 @@ def load_model():
         device=-1
     )
 
+# === Session requêtes robuste pour Wikipedia ===
+def get_wikipedia_session():
+    """Crée une session robuste pour accéder à Wikipedia API"""
+    session = requests.Session()
+    
+    # Stratégie de retry robuste
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # Headers complets
+    session.headers.update({
+        "User-Agent": "ArabicQABot/1.0 (Arabic Wikipedia QA; +https://github.com/mysonomikane/arabic-qa-streamlit)",
+        "Accept-Language": "ar,en-US;q=0.9",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate"
+    })
+    
+    return session
+
 # === Recherche Wikipedia Arabe ===
 def search_wikipedia_arabic(query, num_results=5):
     """
@@ -64,12 +93,8 @@ def search_wikipedia_arabic(query, num_results=5):
     C'est le composant RETRIEVAL du système RAG.
     """
     try:
+        session = get_wikipedia_session()
         api_url = "https://ar.wikipedia.org/w/api.php"
-        
-        # Headers requis par Wikipedia API
-        headers = {
-            "User-Agent": "ArabicQABot/1.0 (https://github.com/mysonomikane/arabic-qa-streamlit; Arabic QA Research Project)"
-        }
         
         # Étape 1: Rechercher les articles pertinents
         search_params = {
@@ -77,11 +102,10 @@ def search_wikipedia_arabic(query, num_results=5):
             "list": "search",
             "srsearch": query,
             "srlimit": num_results,
-            "format": "json",
-            "utf8": 1
+            "format": "json"
         }
         
-        response = requests.get(api_url, params=search_params, headers=headers, timeout=15)
+        response = session.get(api_url, params=search_params, timeout=20)
         response.raise_for_status()
         search_data = response.json()
         
@@ -91,6 +115,9 @@ def search_wikipedia_arabic(query, num_results=5):
         # Récupérer les titres des articles trouvés
         titles = [result["title"] for result in search_data["query"]["search"]]
         
+        # Délai pour respecter le rate limiting de Wikipedia
+        time.sleep(0.5)
+        
         # Étape 2: Récupérer le contenu des articles
         content_params = {
             "action": "query",
@@ -99,11 +126,10 @@ def search_wikipedia_arabic(query, num_results=5):
             "exintro": False,
             "explaintext": True,
             "exlimit": 3,
-            "format": "json",
-            "utf8": 1
+            "format": "json"
         }
         
-        response = requests.get(api_url, params=content_params, headers=headers, timeout=15)
+        response = session.get(api_url, params=content_params, timeout=20)
         response.raise_for_status()
         content_data = response.json()
         
@@ -131,11 +157,18 @@ def search_wikipedia_arabic(query, num_results=5):
         return combined_context, sources, None
         
     except requests.exceptions.Timeout:
-        return None, [], "انتهت مهلة الاتصال بويكيبيديا"
-    except requests.exceptions.RequestException as e:
-        return None, [], f"خطأ في الاتصال: {str(e)}"
+        return None, [], "⏱️ انتهت مهلة الاتصال بويكيبيديا (Timeout). حاول لاحقاً."
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            return None, [], "🚫 رفضت ويكيبيديا الطلب (403). جرب سؤالاً آخر."
+        elif e.response.status_code == 429:
+            return None, [], "⏳ طلبات كثيرة. انتظر قليلاً ثم حاول مجدداً."
+        else:
+            return None, [], f"❌ خطأ HTTP: {e.response.status_code}"
+    except requests.exceptions.ConnectionError:
+        return None, [], "❌ خطأ في الاتصال بويكيبيديا. تحقق من اتصالك بالإنترنت."
     except Exception as e:
-        return None, [], f"خطأ: {str(e)}"
+        return None, [], f"❌ خطأ: {str(e)}"
 
 # === Interface principale ===
 st.markdown("""
