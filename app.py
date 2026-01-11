@@ -1,14 +1,12 @@
-
 import streamlit as st
 from transformers import pipeline
-import torch
+import requests
 
 # Configuration de la page
 st.set_page_config(
     page_title="نظام الإجابة على الأسئلة",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="🤖",
+    layout="centered"
 )
 
 # CSS pour le support RTL (arabe)
@@ -18,27 +16,39 @@ st.markdown("""
         direction: rtl;
         text-align: right;
     }
-    .stTextArea textarea {
-        direction: rtl;
-        text-align: right;
-    }
     .stTextInput input {
         direction: rtl;
         text-align: right;
+        font-size: 18px;
     }
     .answer-box {
-        background-color: #e8f5e9;
-        padding: 20px;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 25px;
+        border-radius: 15px;
+        color: white;
         direction: rtl;
         text-align: right;
+        margin: 20px 0;
+    }
+    .answer-box h2 {
+        margin: 0;
+        font-size: 24px;
     }
     .source-box {
-        background-color: #e3f2fd;
+        background-color: #f0f2f6;
         padding: 15px;
         border-radius: 10px;
         direction: rtl;
         text-align: right;
+        margin-top: 10px;
+        font-size: 14px;
+    }
+    .confidence {
+        background-color: rgba(255,255,255,0.2);
+        padding: 5px 15px;
+        border-radius: 20px;
+        display: inline-block;
+        margin-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -49,141 +59,162 @@ def load_model():
     """Charge le modèle QA fine-tuné depuis Hugging Face"""
     return pipeline(
         "question-answering",
-        model="sonomikane/arabert-qa-arabic-wikipedia",  # Votre modèle fine-tuné
+        model="sonomikane/arabert-qa-arabic-wikipedia",
         tokenizer="sonomikane/arabert-qa-arabic-wikipedia",
-        device=-1  # CPU pour Streamlit Cloud
+        device=-1  # CPU
     )
 
-# Charger le modèle
-with st.spinner("جاري تحميل النموذج... (Loading model...)"):
-    qa_pipeline = load_model()
+# === Recherche Wikipedia ===
+def search_wikipedia(query, num_results=3):
+    """Recherche dans Wikipedia arabe et retourne le contenu"""
+    try:
+        # Rechercher des articles
+        search_url = "https://ar.wikipedia.org/w/api.php"
+        search_params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": num_results,
+            "format": "json"
+        }
+        response = requests.get(search_url, params=search_params, timeout=10)
+        search_results = response.json()
+        
+        if "query" not in search_results or not search_results["query"]["search"]:
+            return None, []
+        
+        # Récupérer le contenu des articles
+        titles = [r["title"] for r in search_results["query"]["search"]]
+        content_params = {
+            "action": "query",
+            "titles": "|".join(titles),
+            "prop": "extracts",
+            "exintro": False,
+            "explaintext": True,
+            "exlimit": num_results,
+            "format": "json"
+        }
+        response = requests.get(search_url, params=content_params, timeout=10)
+        content_results = response.json()
+        
+        # Combiner le contenu
+        pages = content_results.get("query", {}).get("pages", {})
+        contexts = []
+        sources = []
+        
+        for page_id, page in pages.items():
+            if page_id != "-1" and "extract" in page:
+                text = page["extract"][:2000]  # Limiter la taille
+                if text:
+                    contexts.append(text)
+                    sources.append(page.get("title", ""))
+        
+        combined_context = " ".join(contexts)
+        return combined_context, sources
+        
+    except Exception as e:
+        return None, []
 
 # === Interface principale ===
 st.markdown("""
-# 🔍 نظام الإجابة على الأسئلة بالعربية
-## Arabic Question Answering System
+# 🤖 اسألني أي سؤال بالعربية
+## Posez-moi une question en arabe
 
-اكتب نصاً من ويكيبيديا العربية ثم اسأل سؤالاً عنه
+أكتب سؤالك وسأبحث في ويكيبيديا العربية لأجد الإجابة
 """)
 
 st.divider()
 
-# === Colonnes pour l'interface ===
-col1, col2 = st.columns([2, 1])
+# Charger le modèle
+with st.spinner("جاري تحميل النموذج... (Chargement du modèle...)"):
+    qa_pipeline = load_model()
 
-with col1:
-    # Zone de texte pour le contexte
-    context = st.text_area(
-        "📄 النص (Context)",
-        placeholder="الصق هنا نصاً من ويكيبيديا العربية...",
-        height=200,
-        help="Collez ici un paragraphe de Wikipedia arabe"
-    )
-    
-    # Zone pour la question
-    question = st.text_input(
-        "❓ السؤال (Question)",
-        placeholder="اكتب سؤالك هنا...",
-        help="Écrivez votre question en arabe"
-    )
-    
-    # Bouton de soumission
-    submit = st.button("🔍 ابحث عن الإجابة", type="primary", use_container_width=True)
+# Zone de question
+question = st.text_input(
+    "❓ سؤالك (Votre question)",
+    placeholder="مثال: ما هي عاصمة مصر؟",
+    key="question_input"
+)
 
+# Bouton de recherche
+col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    st.markdown("### 💡 أمثلة")
-    
-    # Exemples prédéfinis
-    examples = {
-        "عاصمة مصر": {
-            "question": "ما هي عاصمة مصر؟",
-            "context": "مصر دولة عربية تقع في شمال أفريقيا. عاصمتها القاهرة وهي أكبر مدينة في العالم العربي."
-        },
-        "جامعة القاهرة": {
-            "question": "متى تأسست الجامعة؟",
-            "context": "تأسست جامعة القاهرة في عام 1908 وهي من أقدم الجامعات في مصر والوطن العربي."
-        },
-        "نهر النيل": {
-            "question": "ما هو طول نهر النيل؟",
-            "context": "نهر النيل هو أطول أنهار العالم، يبلغ طوله حوالي 6650 كيلومتر."
-        }
-    }
-    
-    for name, data in examples.items():
-        if st.button(f"📌 {name}", use_container_width=True):
-            st.session_state.example_q = data["question"]
-            st.session_state.example_c = data["context"]
-            st.rerun()
+    search_button = st.button("🔍 ابحث عن الإجابة", type="primary", use_container_width=True)
 
-# Utiliser l'exemple si sélectionné
-if "example_q" in st.session_state:
-    question = st.session_state.example_q
-    context = st.session_state.example_c
-    del st.session_state.example_q
-    del st.session_state.example_c
+# Exemples de questions
+st.markdown("### 💡 أمثلة على الأسئلة:")
+example_cols = st.columns(3)
+examples = [
+    "ما هي عاصمة مصر؟",
+    "من هو أحمد شوقي؟", 
+    "ما هو نهر النيل؟"
+]
+
+for i, ex in enumerate(examples):
+    with example_cols[i]:
+        if st.button(f"📌 {ex}", key=f"ex_{i}", use_container_width=True):
+            st.session_state.selected_question = ex
+
+# Utiliser l'exemple sélectionné
+if "selected_question" in st.session_state:
+    question = st.session_state.selected_question
+    del st.session_state.selected_question
+    search_button = True
 
 # === Traitement de la question ===
-if submit and question and context:
-    with st.spinner("جاري البحث عن الإجابة..."):
-        try:
-            result = qa_pipeline(
-                question=question,
-                context=context,
-                max_answer_len=100
-            )
-            
-            answer = result["answer"]
-            score = result["score"]
-            
-            st.divider()
-            
-            # Afficher la réponse
-            st.markdown("### 💡 الإجابة (Answer)")
-            st.markdown(f"""
-            <div class="answer-box">
-                <h3>📝 {answer}</h3>
-                <p>🎯 الثقة: {score*100:.1f}%</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Barre de progression pour la confiance
-            st.progress(score)
-            
-        except Exception as e:
-            st.error(f"❌ خطأ: {str(e)}")
+if search_button and question:
+    with st.spinner("🔍 جاري البحث في ويكيبيديا..."):
+        # Rechercher dans Wikipedia
+        context, sources = search_wikipedia(question)
+        
+        if context:
+            with st.spinner("🤔 جاري تحليل الإجابة..."):
+                try:
+                    # Utiliser le modèle QA
+                    result = qa_pipeline(
+                        question=question,
+                        context=context,
+                        max_answer_len=150
+                    )
+                    
+                    answer = result["answer"]
+                    score = result["score"]
+                    
+                    # Afficher la réponse
+                    st.markdown(f"""
+                    <div class="answer-box">
+                        <h2>📝 {answer}</h2>
+                        <div class="confidence">🎯 الثقة: {score*100:.1f}%</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Barre de confiance
+                    st.progress(score)
+                    
+                    # Sources
+                    if sources:
+                        st.markdown("**📚 المصادر (Sources):**")
+                        for src in sources:
+                            st.markdown(f"- [{src}](https://ar.wikipedia.org/wiki/{src.replace(' ', '_')})")
+                    
+                    # Contexte utilisé (optionnel)
+                    with st.expander("📄 عرض النص المستخدم (Voir le contexte)"):
+                        st.markdown(f'<div class="source-box">{context[:1500]}...</div>', unsafe_allow_html=True)
+                        
+                except Exception as e:
+                    st.error(f"❌ خطأ في التحليل: {str(e)}")
+        else:
+            st.warning("⚠️ لم أجد معلومات كافية. جرب سؤالاً آخر.")
 
-elif submit:
-    st.warning("⚠️ الرجاء إدخال النص والسؤال")
+elif search_button:
+    st.warning("⚠️ الرجاء كتابة سؤال")
 
-# === Sidebar avec infos ===
-with st.sidebar:
-    st.markdown("## 📊 معلومات النظام")
-    st.markdown("""
-    **Modèle:** AraBERT-v2
-    
-    **Datasets d'entraînement:**
-    - TyDi QA Arabic
-    - ARCD (Arabic SQuAD)
-    - XQuAD Arabic
-    
-    **Métriques:**
-    - F1-Score: 54.36%
-    - Exact Match: 32.80%
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 🔗 Liens utiles")
-    st.markdown("""
-    - [Wikipedia Arabe](https://ar.wikipedia.org)
-    - [AraBERT](https://huggingface.co/aubmindlab)
-    - [Code source](https://github.com)
-    """)
-
-# Footer
+# === Footer ===
 st.divider()
 st.markdown("""
-<div style="text-align: center; color: gray;">
-    Made with ❤️ using Streamlit & AraBERT
+<div style="text-align: center; color: gray; font-size: 14px;">
+    🤖 <strong>Modèle:</strong> <a href="https://huggingface.co/sonomikane/arabert-qa-arabic-wikipedia">sonomikane/arabert-qa-arabic-wikipedia</a><br>
+    📊 Fine-tuné sur TyDi QA + ARCD + XQuAD | F1: 54.36%<br>
+    🔍 Recherche automatique dans Wikipedia Arabe
 </div>
 """, unsafe_allow_html=True)
